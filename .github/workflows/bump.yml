@@ -1,13 +1,16 @@
 name: Bump mel formula
 
-# Tracks the latest @melius-ai/cli release on npm and updates Formula/mel.rb —
-# hourly and on demand.
+# Tracks the latest @melius-ai/cli release on npm and opens a PR updating
+# Formula/mel.rb — hourly and on demand.
 #
-# Pushing needs a GitHub App token: the Melius-AI enterprise disables write for
-# the default GITHUB_TOKEN *and* deploy keys, so neither can push. Configure the
-# same org GitHub App used for release-please (installed on this repo too) via
-# secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY. Until then this
-# skips cleanly — bump manually with `scripts/bump.sh`.
+# master is branch-protected (no direct pushes), so this opens a PR rather than
+# committing to master. Merging the PR publishes the new version to the tap.
+#
+# Pushing the PR branch needs a GitHub App token: the Melius-AI enterprise
+# disables write for the default GITHUB_TOKEN *and* deploy keys, so neither can
+# push. Configure the same org GitHub App used for release-please (installed on
+# this repo too) via secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY.
+# Until those exist the job is a clean no-op — bump manually with scripts/bump.sh.
 
 on:
   schedule:
@@ -25,10 +28,14 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # env (unlike secrets) is available in step `if:` — gate on this so the
+      # job skips cleanly when the app secrets are not configured.
+      APP_ID: ${{ secrets.RELEASE_PLEASE_APP_ID }}
     steps:
       - name: Mint GitHub App token
         id: token
-        if: ${{ secrets.RELEASE_PLEASE_APP_ID != '' }}
+        if: ${{ env.APP_ID != '' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
@@ -36,7 +43,7 @@ jobs:
 
       - name: No push credential — skip
         if: ${{ steps.token.outputs.token == '' }}
-        run: echo "::notice::No app token configured — skipping auto-bump. Run scripts/bump.sh manually, or set the app secrets (see README)."
+        run: echo "::notice::No app token configured — skipping auto-bump. Run scripts/bump.sh manually and open a PR, or set the app secrets (see README)."
 
       - uses: actions/checkout@v4
         if: ${{ steps.token.outputs.token != '' }}
@@ -44,9 +51,27 @@ jobs:
         with:
           token: ${{ steps.token.outputs.token }}
 
-      - name: Bump to the latest npm release
+      - name: Open a PR bumping to the latest npm release
         if: ${{ steps.token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          bash scripts/bump.sh --push
+          bash scripts/bump.sh   # edits Formula/mel.rb if npm is ahead; no push
+          if git diff --quiet; then
+            echo "::notice::Formula already current — nothing to do."
+            exit 0
+          fi
+          version="$(grep -oE 'cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz' Formula/mel.rb | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+          branch="auto-bump/mel-${version}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::notice::Branch ${branch} already exists — a PR is already open for ${version}."
+            exit 0
+          fi
+          git switch -c "$branch"
+          git commit -am "mel ${version}"
+          git push origin "$branch"
+          gh pr create --base master --head "$branch" \
+            --title "mel ${version}" \
+            --body "Automated bump of \`Formula/mel.rb\` to \`@melius-ai/cli@${version}\` (url + sha256 pulled from the npm registry). Merge to publish it to the tap."
