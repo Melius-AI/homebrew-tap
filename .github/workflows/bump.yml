@@ -1,0 +1,47 @@
+name: Bump mel formula
+
+# Keeps Formula/mel.rb tracking the latest @melius-ai/cli release on npm —
+# automatically, with no secrets (uses the repo's own GITHUB_TOKEN).
+# Runs hourly and on demand; a no-op when already current.
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: bump-mel
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Bump to the latest published @melius-ai/cli
+        run: |
+          set -euo pipefail
+          latest=$(curl -fsSL https://registry.npmjs.org/@melius-ai/cli/latest \
+            | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
+          current=$(grep -oE 'cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz' Formula/mel.rb | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "latest=$latest current=$current"
+          if [ "$latest" = "$current" ]; then
+            echo "Formula already at $current — nothing to do."
+            exit 0
+          fi
+          url="https://registry.npmjs.org/@melius-ai/cli/-/cli-${latest}.tgz"
+          sha=$(curl -fsSL "$url" | shasum -a 256 | awk '{print $1}')
+          [ "${#sha}" -eq 64 ] || { echo "::error::bad sha256 for $url"; exit 1; }
+          echo "→ $url ($sha)"
+          sed -i -E "s#cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz#cli-${latest}.tgz#" Formula/mel.rb
+          sed -i -E "s#sha256 \"[a-f0-9]{64}\"#sha256 \"${sha}\"#" Formula/mel.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "mel ${latest}"
+          git push
