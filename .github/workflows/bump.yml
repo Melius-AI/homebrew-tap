@@ -1,8 +1,13 @@
 name: Bump mel formula
 
-# Keeps Formula/mel.rb tracking the latest @melius-ai/cli release on npm —
-# automatically, with no secrets (uses the repo's own GITHUB_TOKEN).
-# Runs hourly and on demand; a no-op when already current.
+# Tracks the latest @melius-ai/cli release on npm and updates Formula/mel.rb —
+# hourly and on demand.
+#
+# Pushing needs a GitHub App token: the Melius-AI enterprise disables write for
+# the default GITHUB_TOKEN *and* deploy keys, so neither can push. Configure the
+# same org GitHub App used for release-please (installed on this repo too) via
+# secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY. Until then this
+# skips cleanly — bump manually with `scripts/bump.sh`.
 
 on:
   schedule:
@@ -14,34 +19,34 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bump:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        timeout-minutes: 5
+      - name: Mint GitHub App token
+        id: token
+        if: ${{ secrets.RELEASE_PLEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
 
-      - name: Bump to the latest published @melius-ai/cli
+      - name: No push credential — skip
+        if: ${{ steps.token.outputs.token == '' }}
+        run: echo "::notice::No app token configured — skipping auto-bump. Run scripts/bump.sh manually, or set the app secrets (see README)."
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.token.outputs.token != '' }}
+        timeout-minutes: 5
+        with:
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Bump to the latest npm release
+        if: ${{ steps.token.outputs.token != '' }}
         run: |
-          set -euo pipefail
-          latest=$(curl -fsSL https://registry.npmjs.org/@melius-ai/cli/latest \
-            | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
-          current=$(grep -oE 'cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz' Formula/mel.rb | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-          echo "latest=$latest current=$current"
-          if [ "$latest" = "$current" ]; then
-            echo "Formula already at $current — nothing to do."
-            exit 0
-          fi
-          url="https://registry.npmjs.org/@melius-ai/cli/-/cli-${latest}.tgz"
-          sha=$(curl -fsSL "$url" | shasum -a 256 | awk '{print $1}')
-          [ "${#sha}" -eq 64 ] || { echo "::error::bad sha256 for $url"; exit 1; }
-          echo "→ $url ($sha)"
-          sed -i -E "s#cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz#cli-${latest}.tgz#" Formula/mel.rb
-          sed -i -E "s#sha256 \"[a-f0-9]{64}\"#sha256 \"${sha}\"#" Formula/mel.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "mel ${latest}"
-          git push
+          bash scripts/bump.sh --push
