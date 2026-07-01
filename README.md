@@ -19,16 +19,18 @@ brew install mel
 
 ## Keeping the formula current
 
-`Formula/mel.rb` pins a version (url + sha256), so it must be bumped when a new
-`@melius-ai/cli` is published to npm.
+`Formula/mel.rb` pins a version (url + sha256), so it must be re-pinned when a
+new `@melius-ai/cli` is published to npm.
 
-`master` is branch-protected — no direct pushes, so every bump lands as a PR.
+`master` is branch-protected — no direct pushes, so every bump lands as a PR
+that the workflow auto-merges.
 
-- **Automatic (once configured):** `.github/workflows/bump.yml` runs hourly,
-  and when npm is ahead it opens a PR updating the formula. It needs a GitHub
-  App token to push the PR branch (the Melius-AI enterprise disables the default
-  `GITHUB_TOKEN` write and deploy keys) — set `RELEASE_PLEASE_APP_ID` +
-  `RELEASE_PLEASE_APP_PRIVATE_KEY` (the same org app used for release-please,
-  installed on this repo too). Until those exist the job is a clean no-op.
+- **Automatic (once configured):** `.github/workflows/bump.yml` re-pins the
+  formula to the latest npm version and merges it. It fires right after a new
+  version publishes (a `repository_dispatch` from the monorepo release workflow)
+  and hourly as a fallback. It needs `RELEASE_PLEASE_TOKEN` — a fine-grained PAT
+  with **Contents + Pull requests: read/write** on this repo (the same secret
+  the monorepo uses) — because the Melius-AI enterprise disables the default
+  `GITHUB_TOKEN` write and deploy keys. Until it's set the job is a clean no-op.
 - **Manual (works today):** from the tap root, run `scripts/bump.sh` to edit the
   formula, then commit on a branch and open a PR.
