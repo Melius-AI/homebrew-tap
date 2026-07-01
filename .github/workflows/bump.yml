@@ -1,18 +1,23 @@
 name: Bump mel formula
 
-# Tracks the latest @melius-ai/cli release on npm and opens a PR updating
-# Formula/mel.rb — hourly and on demand.
+# Re-pins Formula/mel.rb to the latest @melius-ai/cli on npm and auto-merges the
+# change. Triggers:
+#   - repository_dispatch (npm-published) from the monorepo release workflow —
+#     fires right after a new version publishes (near-instant).
+#   - schedule (hourly) — fallback in case a dispatch is ever missed.
+#   - workflow_dispatch — manual.
 #
-# master is branch-protected (no direct pushes), so this opens a PR rather than
-# committing to master. Merging the PR publishes the new version to the tap.
-#
-# Pushing the PR branch needs a GitHub App token: the Melius-AI enterprise
-# disables write for the default GITHUB_TOKEN *and* deploy keys, so neither can
-# push. Configure the same org GitHub App used for release-please (installed on
-# this repo too) via secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY.
-# Until those exist the job is a clean no-op — bump manually with scripts/bump.sh.
+# master is branch-protected (no direct pushes), so this opens a PR and
+# auto-merges it. Pushing/merging needs a token that isn't the default
+# GITHUB_TOKEN (the Melius-AI enterprise disables its write + deploy keys). Set
+# either the same GitHub App the monorepo uses (RELEASE_PLEASE_APP_ID +
+# RELEASE_PLEASE_APP_PRIVATE_KEY — never expires) or a fine-grained PAT
+# (RELEASE_PLEASE_TOKEN — Contents + Pull requests write, caps at 366 days).
+# Until one is set the job is a clean no-op — bump manually with scripts/bump.sh.
 
 on:
+  repository_dispatch:
+    types: [npm-published]
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch: {}
@@ -29,32 +34,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # env (unlike secrets) is available in step `if:` — gate on this so the
-      # job skips cleanly when the app secrets are not configured.
+      # env (unlike secrets) is available in step `if:` — gate on these so the
+      # job skips cleanly when no credential is configured.
       APP_ID: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+      PAT: ${{ secrets.RELEASE_PLEASE_TOKEN }}
     steps:
       - name: Mint GitHub App token
-        id: token
+        id: app-token
         if: ${{ env.APP_ID != '' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
 
-      - name: No push credential — skip
-        if: ${{ steps.token.outputs.token == '' }}
-        run: echo "::notice::No app token configured — skipping auto-bump. Run scripts/bump.sh manually and open a PR, or set the app secrets (see README)."
+      - name: No token — skip
+        if: ${{ steps.app-token.outputs.token == '' && env.PAT == '' }}
+        run: echo "::notice::No credential set (RELEASE_PLEASE_APP_* or RELEASE_PLEASE_TOKEN) — skipping auto-bump. Bump manually with scripts/bump.sh (see README)."
 
       - uses: actions/checkout@v4
-        if: ${{ steps.token.outputs.token != '' }}
+        if: ${{ steps.app-token.outputs.token != '' || env.PAT != '' }}
         timeout-minutes: 5
         with:
-          token: ${{ steps.token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || env.PAT }}
 
-      - name: Open a PR bumping to the latest npm release
-        if: ${{ steps.token.outputs.token != '' }}
+      - name: Bump to the latest npm release and merge
+        if: ${{ steps.app-token.outputs.token != '' || env.PAT != '' }}
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || env.PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -65,13 +71,18 @@ jobs:
           fi
           version="$(grep -oE 'cli-[0-9]+\.[0-9]+\.[0-9]+\.tgz' Formula/mel.rb | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
           branch="auto-bump/mel-${version}"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            echo "::notice::Branch ${branch} already exists — a PR is already open for ${version}."
-            exit 0
-          fi
-          git switch -c "$branch"
+          git switch -C "$branch"
           git commit -am "mel ${version}"
-          git push origin "$branch"
-          gh pr create --base master --head "$branch" \
-            --title "mel ${version}" \
-            --body "Automated bump of \`Formula/mel.rb\` to \`@melius-ai/cli@${version}\` (url + sha256 pulled from the npm registry). Merge to publish it to the tap."
+          git push -f origin "$branch"
+          gh pr view "$branch" >/dev/null 2>&1 \
+            || gh pr create --base master --head "$branch" \
+                 --title "mel ${version}" \
+                 --body "Automated bump of \`Formula/mel.rb\` to \`@melius-ai/cli@${version}\` (url + sha256 from npm)."
+          # master requires a PR (0 approvals, no required checks); merge it,
+          # retrying while GitHub finishes computing mergeability.
+          for i in $(seq 1 6); do
+            gh pr merge "$branch" --squash --delete-branch && exit 0
+            echo "merge not ready yet (attempt ${i}) — retrying"; sleep 10
+          done
+          echo "::error::Could not auto-merge the bump PR for ${version}."
+          exit 1
