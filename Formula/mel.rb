@@ -1,8 +1,8 @@
 class Mel < Formula
   desc "Create Melius canvases and run AI image/video generations from your terminal"
   homepage "https://docs.melius.com"
-  url "https://registry.npmjs.org/@melius-ai/cli/-/cli-0.6.0.tgz"
-  sha256 "2281bd1527c9ce7d035dafb9193dc967ad447e4126d2ac349519be7322f7fa9a"
+  url "https://registry.npmjs.org/@melius-ai/cli/-/cli-0.7.0.tgz"
+  sha256 "f8c621068babe86e6241a6ce24c4172870fb8fa4499cbd21077e107a15514095"
   license "MIT"
 
   depends_on "node"
