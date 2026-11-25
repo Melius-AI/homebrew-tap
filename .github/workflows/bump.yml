@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: "peak"
     timeout-minutes: 10
     env:
       # env (unlike secrets) is available in step `if:` — gate on these so the
